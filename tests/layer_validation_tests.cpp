@@ -34159,6 +34159,125 @@ TEST_F(VkPositiveLayerTest, BindMemory2) {
     m_errorMonitor->VerifyNotFound();
 }
 
+TEST_F(VkPositiveLayerTest, MultiplaneImageCopyBufferToImage) {
+    TEST_DESCRIPTION("Positive test of multiplane copy buffer to image");
+
+    // Enable KHR multiplane req'd extensions
+    bool mp_extensions = InstanceExtensionSupported(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
+                                                    VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_SPEC_VERSION);
+    if (mp_extensions) {
+        m_instance_extension_names.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+    }
+    SetTargetApiVersion(VK_API_VERSION_1_1);
+    ASSERT_NO_FATAL_FAILURE(InitFramework(myDbgFunc, m_errorMonitor));
+    mp_extensions = mp_extensions && DeviceExtensionSupported(gpu(), nullptr, VK_KHR_MAINTENANCE1_EXTENSION_NAME);
+    mp_extensions = mp_extensions && DeviceExtensionSupported(gpu(), nullptr, VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME);
+    mp_extensions = mp_extensions && DeviceExtensionSupported(gpu(), nullptr, VK_KHR_BIND_MEMORY_2_EXTENSION_NAME);
+    mp_extensions = mp_extensions && DeviceExtensionSupported(gpu(), nullptr, VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME);
+    if (mp_extensions) {
+        m_device_extension_names.push_back(VK_KHR_MAINTENANCE1_EXTENSION_NAME);
+        m_device_extension_names.push_back(VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME);
+        m_device_extension_names.push_back(VK_KHR_BIND_MEMORY_2_EXTENSION_NAME);
+        m_device_extension_names.push_back(VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME);
+    } else {
+        printf("%s test requires KHR multiplane extensions, not available.  Skipping.\n", kSkipPrefix);
+        return;
+    }
+    ASSERT_NO_FATAL_FAILURE(InitState(nullptr, nullptr, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT));
+    ASSERT_NO_FATAL_FAILURE(InitRenderTarget());
+
+    VkImageCreateInfo ci = {};
+    ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ci.pNext = NULL;
+    ci.flags = 0;
+    ci.imageType = VK_IMAGE_TYPE_2D;
+    ci.format = VK_FORMAT_G8_B8_R8_3PLANE_444_UNORM_KHR;  // All planes of equal extent
+    ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ci.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    ci.extent = {16, 16, 1};
+    ci.mipLevels = 1;
+    ci.arrayLayers = 1;
+    ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    // Verify format
+    VkFormatFeatureFlags features = VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+    bool supported = ImageFormatAndFeaturesSupported(instance(), gpu(), ci, features);
+    if (!supported) {
+        printf("%s Multiplane image format not supported.  Skipping test.\n", kSkipPrefix);
+        return;  // Assume there's low ROI on searching for different mp formats
+    }
+
+    VkImage image;
+    ASSERT_VK_SUCCESS(vkCreateImage(device(), &ci, NULL, &image));
+
+    // Allocate & bind memory
+    VkPhysicalDeviceMemoryProperties phys_mem_props;
+    vkGetPhysicalDeviceMemoryProperties(gpu(), &phys_mem_props);
+    VkMemoryRequirements mem_reqs;
+    vkGetImageMemoryRequirements(device(), image, &mem_reqs);
+    VkDeviceMemory mem_obj = VK_NULL_HANDLE;
+    VkMemoryPropertyFlagBits mem_props = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    for (uint32_t type = 0; type < phys_mem_props.memoryTypeCount; type++) {
+        if ((mem_reqs.memoryTypeBits & (1 << type)) &&
+            ((phys_mem_props.memoryTypes[type].propertyFlags & mem_props) == mem_props)) {
+            VkMemoryAllocateInfo alloc_info = {};
+            alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            alloc_info.allocationSize = mem_reqs.size;
+            alloc_info.memoryTypeIndex = type;
+            ASSERT_VK_SUCCESS(vkAllocateMemory(device(), &alloc_info, NULL, &mem_obj));
+            break;
+        }
+    }
+
+    if (VK_NULL_HANDLE == mem_obj) {
+        printf("%s Unable to allocate image memory. Skipping test.\n", kSkipPrefix);
+        vkDestroyImage(device(), image, NULL);
+        return;
+    }
+    ASSERT_VK_SUCCESS(vkBindImageMemory(device(), image, mem_obj, 0));
+
+    vkResetCommandBuffer(m_commandBuffer->handle(), 0);
+    m_errorMonitor->ExpectSuccess();
+    m_commandBuffer->begin();
+
+    VkImageMemoryBarrier pre_parrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                                        0,
+                                        0,
+                                        VK_ACCESS_TRANSFER_WRITE_BIT,
+                                        VK_IMAGE_LAYOUT_UNDEFINED,
+                                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                        VK_QUEUE_FAMILY_IGNORED,
+                                        VK_QUEUE_FAMILY_IGNORED,
+                                        image,
+                                        {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+
+    vkCmdPipelineBarrier(m_commandBuffer->handle(), VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, 0, 0, 0, 1u,
+                         &pre_parrier);
+
+    VkImageAspectFlagBits aspects[3] = {VK_IMAGE_ASPECT_PLANE_0_BIT, VK_IMAGE_ASPECT_PLANE_1_BIT, VK_IMAGE_ASPECT_PLANE_2_BIT};
+    VkBufferObj buffers[3];
+    VkMemoryPropertyFlags reqs = 0;
+
+    VkBufferImageCopy copy = {};
+    copy.imageSubresource.layerCount = 1;
+    copy.imageExtent.depth = 1;
+    copy.imageExtent.height = 16;
+    copy.imageExtent.width = 16;
+
+    for (int i = 0; i < 3; ++i) {
+        buffers[i].init_as_src(*m_device, (VkDeviceSize)16 * 16 * 1, reqs);
+        copy.imageSubresource.aspectMask = aspects[i];
+        vkCmdCopyBufferToImage(m_commandBuffer->handle(), buffers[i].handle(), image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                               &copy);
+    }
+    m_commandBuffer->end();
+    m_errorMonitor->VerifyNotFound();
+    vkFreeMemory(device(), mem_obj, NULL);
+    vkDestroyImage(device(), image, NULL);
+}
+
 TEST_F(VkPositiveLayerTest, MultiplaneImageTests) {
     TEST_DESCRIPTION("Positive test of multiplane image operations");
 
