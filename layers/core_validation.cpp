@@ -1556,7 +1556,7 @@ bool CoreChecks::ValidatePipelineUnlocked(std::vector<std::unique_ptr<PIPELINE_S
             VkFormat format = vi->pVertexAttributeDescriptions[j].format;
             // Internal call to get format info.  Still goes through layers, could potentially go directly to ICD.
             VkFormatProperties properties;
-            instance_dispatch_table.GetPhysicalDeviceFormatProperties(dev_data->physical_device, format, &properties);
+            instance_dispatch_table.GetPhysicalDeviceFormatProperties(physical_device, format, &properties);
             if ((properties.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) == 0) {
                 skip |=
                     log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
@@ -2354,7 +2354,7 @@ void CoreChecks::PostCallRecordCreateDevice(VkPhysicalDevice gpu, const VkDevice
         }
     }
 
-    ValidationObject *device_object = ::GetLayerDataPtr(::get_dispatch_key(*pDevice), ::layer_data_map);
+    ValidationObject *device_object = GetLayerDataPtr(get_dispatch_key(*pDevice), layer_data_map);
     ValidationObject *validation_data = GetValidationObject(device_object->object_dispatch, LayerObjectTypeCoreValidation);
     CoreChecks *core_checks = static_cast<CoreChecks *>(validation_data);
 
@@ -3843,7 +3843,7 @@ void CoreChecks::RetireFence(VkFence fence) {
 bool CoreChecks::PreCallValidateWaitForFences(VkDevice device, uint32_t fenceCount, const VkFence *pFences, VkBool32 waitAll,
                                               uint64_t timeout) {
     // Verify fence status of submitted fences
-    if (device_data->instance_data->disabled.wait_for_fences) return false;
+    if (disabled.wait_for_fences) return false;
     bool skip = false;
     for (uint32_t i = 0; i < fenceCount; i++) {
         skip |= VerifyWaitFenceState(pFences[i], "vkWaitForFences");
@@ -5140,7 +5140,7 @@ void CoreChecks::PostCallRecordCreateSampler(VkDevice device, const VkSamplerCre
 bool CoreChecks::PreCallValidateCreateDescriptorSetLayout(VkDevice device, const VkDescriptorSetLayoutCreateInfo *pCreateInfo,
                                                           const VkAllocationCallbacks *pAllocator,
                                                           VkDescriptorSetLayout *pSetLayout) {
-    if (instance_data->disabled.create_descriptor_set_layout) return false;
+    if (disabled.create_descriptor_set_layout) return false;
     return cvdescriptorset::DescriptorSetLayout::ValidateCreateInfo(
         report_data, pCreateInfo, device_extensions.vk_khr_push_descriptor, phys_dev_ext_props.max_push_descriptors,
         device_extensions.vk_ext_descriptor_indexing, &enabled_features.descriptor_indexing, &enabled_features.inline_uniform_block,
@@ -5158,7 +5158,7 @@ void CoreChecks::PostCallRecordCreateDescriptorSetLayout(VkDevice device, const 
 // Note that the index argument is optional and only used by CreatePipelineLayout.
 bool CoreChecks::ValidatePushConstantRange(const uint32_t offset, const uint32_t size, const char *caller_name,
                                            uint32_t index = 0) {
-    if (instance_data->disabled.push_constant_range) return false;
+    if (disabled.push_constant_range) return false;
     uint32_t const maxPushConstantsSize = phys_dev_props.limits.maxPushConstantsSize;
     bool skip = false;
     // Check that offset + size don't exceed the max.
