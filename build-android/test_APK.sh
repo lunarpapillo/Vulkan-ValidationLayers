@@ -246,7 +246,7 @@ errFile="VulkanLayerValidationTests.$platform.$today.err.txt"
 logFile="VulkanLayerValidationTests.$platform.$today.logcat.txt"
 adb $serialFlag pull /sdcard/Android/data/com.example.VulkanLayerValidationTests/files/out.txt $outFile
 adb $serialFlag pull /sdcard/Android/data/com.example.VulkanLayerValidationTests/files/err.txt $errFile
-adb $serialFlag logcat -d | grep VulkanLayerValidationTests > $logFile
+adb $serialFlag logcat -d > $logFile
 
 if [ -f $outFile ]; then
     echo $outFile size $(wc -c < $outFile)
